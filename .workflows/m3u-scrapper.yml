@@ -1,0 +1,132 @@
+name: Rutube Full Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: "Rutube video ID"
+        required: true
+        type: string
+
+      test_streams:
+        description: "Проверять доступность HLS-потоков"
+        required: true
+        default: true
+        type: boolean
+
+      timeout:
+        description: "HTTP timeout, seconds"
+        required: true
+        default: "30"
+        type: string
+
+      output_name:
+        description: "Output directory"
+        required: true
+        default: "rutube_output"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      RUTUBE_PHONE: ${{ secrets.RUTUBE_PHONE }}
+      RUTUBE_PASSWORD: ${{ secrets.RUTUBE_PASSWORD }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Download scraper
+        run: |
+          mkdir -p scraper
+          curl -fL \
+            "https://raw.githubusercontent.com/Phoenix89S/RutubeM3U8Scrapper/master/rutube_scrapper.py" \
+            -o scraper/rutube_scrapper.py
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install "requests>=2.31,<3"
+
+      - name: Check credentials
+        run: |
+          test -n "$RUTUBE_PHONE" || {
+            echo "::error::RUTUBE_PHONE secret is not set"
+            exit 1
+          }
+
+          test -n "$RUTUBE_PASSWORD" || {
+            echo "::error::RUTUBE_PASSWORD secret is not set"
+            exit 1
+          }
+
+      - name: Prepare output
+        run: |
+          mkdir -p "${{ inputs.output_name }}"
+
+      - name: Run Rutube scraper
+        run: |
+          CMD=(
+            python scraper/rutube_scrapper.py
+            "${{ inputs.video_id }}"
+            --phone "$RUTUBE_PHONE"
+            --password "$RUTUBE_PASSWORD"
+            --output "${{ inputs.output_name }}"
+            --timeout "${{ inputs.timeout }}"
+          )
+
+          if [ "${{ inputs.test_streams }}" != "true" ]; then
+            CMD+=(--no-test)
+          fi
+
+          "${CMD[@]}"
+
+      - name: Show generated files
+        if: always()
+        run: |
+          echo "===== GENERATED FILES ====="
+          find "${{ inputs.output_name }}" -type f -printf '%p\n' | sort
+
+      - name: Upload full results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rutube-${{ inputs.video_id }}
+          path: ${{ inputs.output_name }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload ML dataset
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rutube-ml-${{ inputs.video_id }}
+          path: |
+            ${{ inputs.output_name }}/*.json
+            ${{ inputs.output_name }}/*_ml.jsonl
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Job summary
+        if: always()
+        run: |
+          echo "## Rutube Scraper" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Video ID: \`${{ inputs.video_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Stream testing: \`${{ inputs.test_streams }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Timeout: \`${{ inputs.timeout }}s\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Files" >> "$GITHUB_STEP_SUMMARY"
+          find "${{ inputs.output_name }}" -type f -printf '%f\n' \
+            2>/dev/null | sort | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
