@@ -1,0 +1,65 @@
+name: Rutube M3U8 Scraper
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_id:
+        description: 'Rutube Video ID'
+        required: true
+        type: string
+  schedule:
+    # Запуск каждый день в 09:00 по UTC
+    - cron: '0 9 * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Шаг 1: Клонирование репозитория
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Шаг 2: Установка нужной версии PHP (например, 8.2)
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, intl, curl
+          
+      # Шаг 3: Установка зависимостей (Guzzle)
+      - name: Install dependencies
+        run: composer install --no-dev --optimize-autoloader
+
+      # Шаг 4: Создание файла конфигурации из секретов
+      - name: Create config.php
+        env:
+          PHONE: ${{ secrets.RUTUBE_PHONE }}
+          PASSWORD: ${{ secrets.RUTUBE_PASSWORD }}
+        run: |
+          cat > config.php <<EOF
+          <?php
+          return [
+              'credentials' => [
+                  'phone' => '${PHONE}',
+                  'password' => '${PASSWORD}'
+              ]
+          ];
+          EOF
+
+      # Шаг 5: Запуск скрипта
+      - name: Run scraper
+        id: run_scrape
+        env:
+          VIDEO_ID: ${{ github.event.inputs.video_id || '6105209' }} # Используем ID из триггера или значение по умолчанию
+        run: |
+          php rutube.php $VIDEO_ID > streams.txt
+          echo "output_file=streams.txt" >> $GITHUB_OUTPUT
+
+      # Опциональный шаг: Загрузка результата как артефакта
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m3u8-streams
+          path: streams.txt
